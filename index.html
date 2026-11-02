@@ -1,0 +1,494 @@
+-- NYX // 22 ADVANCED CINEMATIC SUITE + SMOOTH HD REC HELPER
+-- Target: Roblox (Delta Executor)
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local CoreGui = game:GetService("CoreGui")
+local Lighting = game:GetService("Lighting")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+local GuiParent = (gethui and gethui()) or CoreGui
+
+for _, v in pairs(GuiParent:GetChildren()) do
+    if v.Name == "NyxCineAuto" or v.Name == "NyxCineCam" then
+        v:Destroy()
+    end
+end
+
+-- State & Config
+local State = {
+    Enabled = false,
+    Mode = "FREE",
+    Dir = 1,
+    Speed = 1.0,
+    Smooth = 0.05, -- Lebih lembut & berat ala gimbal mahal
+    FOV = 65,      -- Lensa sinematik (sedikit telephoto)
+    UIHidden = false,
+    Timer = 0,
+    HDLock = false
+}
+
+local CamPos = Camera.CFrame.Position
+local TargetPos = CamPos
+local CamRot = Vector3.new(0, 0, 0)
+local TargetRot = Vector3.new(0, 0, 0)
+local BaseCFrame = Camera.CFrame
+local PivotPos = Vector3.new(0, 0, 0)
+local LastSubjectPos = Vector3.new(0, 0, 0)
+
+-- Ambil fokus objek dinamis di depan kamera
+local function GetFocusTarget()
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    if LocalPlayer.Character then
+        params.FilterDescendantsInstances = {LocalPlayer.Character}
+    end
+    local hit = workspace:Raycast(BaseCFrame.Position, BaseCFrame.LookVector * 40, params)
+    if hit then
+        return hit.Position
+    end
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if hrp then
+        return hrp.Position + Vector3.new(0, 1.5, 0)
+    end
+    return BaseCFrame.Position + (BaseCFrame.LookVector * 15)
+end
+
+-- ================= UI BUILDER =================
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "NyxCineAuto"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.Parent = GuiParent
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Size = UDim2.new(0, 290, 0, 370)
+MainFrame.Position = UDim2.new(0.02, 0, 0.12, 0)
+MainFrame.BackgroundColor3 = Color3.fromRGB(14, 14, 18)
+MainFrame.BackgroundTransparency = 0.08
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Draggable = true
+MainFrame.Parent = ScreenGui
+
+local MainCorner = Instance.new("UICorner", MainFrame)
+MainCorner.CornerRadius = UDim.new(0, 8)
+
+local Title = Instance.new("TextLabel", MainFrame)
+Title.Size = UDim2.new(1, -20, 0, 24)
+Title.Position = UDim2.new(0, 10, 0, 4)
+Title.BackgroundTransparency = 1
+Title.Text = "NYX // 22 PRO CINEMATIC RIG"
+Title.TextColor3 = Color3.fromRGB(240, 195, 80)
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = 12
+Title.TextXAlignment = Enum.TextXAlignment.Left
+
+local function MakeBtn(txt, pos, size, parent, bg)
+    local b = Instance.new("TextButton")
+    b.Size = size
+    b.Position = pos
+    b.BackgroundColor3 = bg or Color3.fromRGB(30, 30, 40)
+    b.TextColor3 = Color3.fromRGB(230, 230, 235)
+    b.Font = Enum.Font.GothamSemibold
+    b.TextSize = 11
+    b.Text = txt
+    b.AutoButtonColor = true
+    b.Parent = parent
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 5)
+    return b
+end
+
+-- Baris Kontrol Atas
+local MasterBtn = MakeBtn("Cam: OFF", UDim2.new(0, 10, 0, 30), UDim2.new(0.48, -10, 0, 26), MainFrame, Color3.fromRGB(45, 45, 55))
+local HDLockBtn = MakeBtn("HD Lock: OFF", UDim2.new(0.52, 0, 0, 30), UDim2.new(0.48, -10, 0, 26), MainFrame, Color3.fromRGB(45, 45, 55))
+
+local StatusLbl = Instance.new("TextLabel", MainFrame)
+StatusLbl.Size = UDim2.new(1, -20, 0, 16)
+StatusLbl.Position = UDim2.new(0, 10, 0, 60)
+StatusLbl.BackgroundTransparency = 1
+StatusLbl.Text = "Mode: FREE MANUAL"
+StatusLbl.TextColor3 = Color3.fromRGB(130, 200, 255)
+StatusLbl.Font = Enum.Font.GothamMedium
+StatusLbl.TextSize = 11
+StatusLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+-- ScrollingFrame 22 Preset Cinematic
+local PresetScroll = Instance.new("ScrollingFrame", MainFrame)
+PresetScroll.Size = UDim2.new(1, -20, 0, 210)
+PresetScroll.Position = UDim2.new(0, 10, 0, 80)
+PresetScroll.BackgroundColor3 = Color3.fromRGB(20, 20, 26)
+PresetScroll.BackgroundTransparency = 0.4
+PresetScroll.BorderSizePixel = 0
+PresetScroll.ScrollBarThickness = 4
+PresetScroll.CanvasSize = UDim2.new(0, 0, 0, 380)
+PresetScroll.Parent = MainFrame
+
+local Presets = {
+    {Id = "PAN", Name = "1. Pan (Poros H)"},
+    {Id = "TILT", Name = "2. Tilt (Poros V)"},
+    {Id = "DOLLY_IN", Name = "3. Dolly In (Maju)"},
+    {Id = "DOLLY_OUT", Name = "4. Dolly Out"},
+    {Id = "TRACKING", Name = "5. Tracking"},
+    {Id = "CRAB", Name = "6. Crab / Side"},
+    {Id = "PED_UP", Name = "7. Pedestal Up"},
+    {Id = "PED_DOWN", Name = "8. Pedestal Down"},
+    {Id = "ARC", Name = "9. Arc (Wide)"},
+    {Id = "WHIP", Name = "10. Whip Pan"},
+    {Id = "COMBO", Name = "11. Tilt + Pan"},
+    {Id = "FOLLOW", Name = "12. Follow Gimbal"},
+    {Id = "THE_ORBIT", Name = "13. The Orbit", Pro = true},
+    {Id = "THE_SPIN", Name = "14. The Spin", Pro = true},
+    {Id = "THE_ARC_V", Name = "15. Arc Top Over", Pro = true},
+    {Id = "THE_REVEAL", Name = "16. The Reveal", Pro = true},
+    -- 6 Preset Baru Tambahan Biar Luas & Dinamis
+    {Id = "PARALLAX_FLY", Name = "17. Parallax Sweep", Pro = true},
+    {Id = "HELIX_CRANE", Name = "18. Helix Crane (Up)", Pro = true},
+    {Id = "DUTCH_SLAM", Name = "19. Dutch Angle Sl", Pro = true},
+    {Id = "Z_BOOM", Name = "20. Z-Axis Boom", Pro = true},
+    {Id = "SWEEP_ARC", Name = "21. Sweep Arc Out", Pro = true},
+    {Id = "ORBIT_ZOOM", Name = "22. Dynamic Close", Pro = true}
+}
+
+local PresetButtons = {}
+
+local function SetMode(modeId, modeName)
+    if not State.Enabled then
+        State.Enabled = true
+        MasterBtn.Text = "Cam: ON"
+        MasterBtn.BackgroundColor3 = Color3.fromRGB(40, 120, 75)
+        CamPos = Camera.CFrame.Position
+        TargetPos = CamPos
+        local rx, ry, rz = Camera.CFrame:ToEulerAnglesYXZ()
+        CamRot = Vector3.new(math.deg(rx), math.deg(ry), math.deg(rz))
+        TargetRot = CamRot
+    end
+
+    State.Mode = modeId
+    State.Timer = 0
+    BaseCFrame = Camera.CFrame
+    PivotPos = GetFocusTarget()
+    LastSubjectPos = PivotPos
+
+    local rx, ry, _ = BaseCFrame:ToEulerAnglesYXZ()
+    CamRot = Vector3.new(math.deg(rx), math.deg(ry), 0)
+    TargetRot = CamRot
+    CamPos = BaseCFrame.Position
+    TargetPos = CamPos
+
+    StatusLbl.Text = "Mode: " .. modeName
+
+    for _, p in ipairs(Presets) do
+        local btn = PresetButtons[p.Id]
+        if btn then
+            if p.Id == modeId then
+                btn.BackgroundColor3 = Color3.fromRGB(220, 165, 40)
+                btn.TextColor3 = Color3.fromRGB(15, 15, 15)
+            else
+                btn.BackgroundColor3 = p.Pro and Color3.fromRGB(45, 35, 65) or Color3.fromRGB(32, 32, 44)
+                btn.TextColor3 = Color3.fromRGB(230, 230, 235)
+            end
+        end
+    end
+end
+
+for idx, p in ipairs(Presets) do
+    local col = (idx - 1) % 2
+    local row = math.floor((idx - 1) / 2)
+    local xPos = (col == 0) and UDim2.new(0, 4, 0, row * 33 + 4) or UDim2.new(0.5, 2, 0, row * 33 + 4)
+    local btnSize = UDim2.new(0.5, -6, 0, 28)
+    local defaultBg = p.Pro and Color3.fromRGB(45, 35, 65) or Color3.fromRGB(32, 32, 44)
+
+    local b = MakeBtn(p.Name, xPos, btnSize, PresetScroll, defaultBg)
+    PresetButtons[p.Id] = b
+
+    b.MouseButton1Click:Connect(function()
+        if State.Mode == p.Id then
+            SetMode("FREE", "FREE MANUAL")
+        else
+            SetMode(p.Id, p.Name)
+        end
+    end)
+end
+
+-- Kontrol Bawah (Speed, FOV, Reset)
+local SpdLbl = Instance.new("TextLabel", MainFrame)
+SpdLbl.Size = UDim2.new(0.5, -10, 0, 16)
+SpdLbl.Position = UDim2.new(0, 10, 0, 294)
+SpdLbl.BackgroundTransparency = 1
+SpdLbl.Text = "Speed: " .. State.Speed .. "x"
+SpdLbl.TextColor3 = Color3.fromRGB(190, 190, 200)
+SpdLbl.Font = Enum.Font.Gotham
+SpdLbl.TextSize = 11
+SpdLbl.TextXAlignment = Enum.TextXAlignment.Left
+SpdLbl.Parent = MainFrame
+
+local FovLbl = Instance.new("TextLabel", MainFrame)
+FovLbl.Size = UDim2.new(0.5, -10, 0, 16)
+FovLbl.Position = UDim2.new(0.5, 0, 0, 294)
+FovLbl.BackgroundTransparency = 1
+FovLbl.Text = "FOV: " .. State.FOV
+FovLbl.TextColor3 = Color3.fromRGB(190, 190, 200)
+FovLbl.Font = Enum.Font.Gotham
+FovLbl.TextSize = 11
+FovLbl.TextXAlignment = Enum.TextXAlignment.Left
+FovLbl.Parent = MainFrame
+
+local SpdDown = MakeBtn("Spd -", UDim2.new(0, 10, 0, 312), UDim2.new(0.23, -5, 0, 22), MainFrame)
+local SpdUp = MakeBtn("Spd +", UDim2.new(0.25, 0, 0, 312), UDim2.new(0.23, -5, 0, 22), MainFrame)
+local FovDown = MakeBtn("FOV -", UDim2.new(0.52, 0, 0, 312), UDim2.new(0.23, -5, 0, 22), MainFrame)
+local FovUp = MakeBtn("FOV +", UDim2.new(0.77, 0, 0, 312), UDim2.new(0.23, -10, 0, 22), MainFrame)
+
+local ResetFreeBtn = MakeBtn("Stop Auto / Posisi Manual", UDim2.new(0, 10, 0, 338), UDim2.new(1, -20, 0, 20), MainFrame, Color3.fromRGB(70, 35, 42))
+
+local HideBtn = MakeBtn("HIDE UI (AUTO RECORD MODE)", UDim2.new(1, -85, 0, 12), UDim2.new(0, 75, 0, 26), ScreenGui, Color3.fromRGB(25, 25, 32))
+HideBtn.BackgroundTransparency = 0.35
+
+-- ================= BUTTON EVENTS =================
+MasterBtn.MouseButton1Click:Connect(function()
+    State.Enabled = not State.Enabled
+    if State.Enabled then
+        MasterBtn.Text = "Cam: ON"
+        MasterBtn.BackgroundColor3 = Color3.fromRGB(40, 120, 75)
+        CamPos = Camera.CFrame.Position
+        TargetPos = CamPos
+        local rx, ry, _ = Camera.CFrame:ToEulerAnglesYXZ()
+        CamRot = Vector3.new(math.deg(rx), math.deg(ry), 0)
+        TargetRot = CamRot
+        BaseCFrame = Camera.CFrame
+        PivotPos = GetFocusTarget()
+    else
+        MasterBtn.Text = "Cam: OFF"
+        MasterBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+        State.Mode = "FREE"
+        StatusLbl.Text = "Mode: OFF"
+        for _, p in ipairs(Presets) do
+            local btn = PresetButtons[p.Id]
+            if btn then
+                btn.BackgroundColor3 = p.Pro and Color3.fromRGB(45, 35, 65) or Color3.fromRGB(32, 32, 44)
+                btn.TextColor3 = Color3.fromRGB(230, 230, 235)
+            end
+        end
+        Camera.CameraType = Enum.CameraType.Custom
+        Camera.FieldOfView = 70
+    end
+end)
+
+HDLockBtn.MouseButton1Click:Connect(function()
+    State.HDLock = not State.HDLock
+    if State.HDLock then
+        HDLockBtn.Text = "HD Lock: ON"
+        HDLockBtn.BackgroundColor3 = Color3.fromRGB(50, 110, 150)
+        Lighting.GlobalShadows = true
+        Lighting.Brightness = 2.2
+        Lighting.OutdoorAmbient = Color3.fromRGB(60, 60, 70)
+    else
+        HDLockBtn.Text = "HD Lock: OFF"
+        HDLockBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+    end
+end)
+
+SpdDown.MouseButton1Click:Connect(function()
+    State.Speed = math.max(0.2, math.floor((State.Speed - 0.2) * 10) / 10)
+    SpdLbl.Text = "Speed: " .. State.Speed .. "x"
+end)
+
+SpdUp.MouseButton1Click:Connect(function()
+    State.Speed = math.min(6.0, math.floor((State.Speed + 0.2) * 10) / 10)
+    SpdLbl.Text = "Speed: " .. State.Speed .. "x"
+end)
+
+FovDown.MouseButton1Click:Connect(function()
+    State.FOV = math.clamp(State.FOV - 5, 15, 120)
+    FovLbl.Text = "FOV: " .. State.FOV
+end)
+
+FovUp.MouseButton1Click:Connect(function()
+    State.FOV = math.clamp(State.FOV + 5, 15, 120)
+    FovLbl.Text = "FOV: " .. State.FOV
+end)
+
+ResetFreeBtn.MouseButton1Click:Connect(function()
+    if State.Enabled then
+        SetMode("FREE", "FREE MANUAL")
+    end
+end)
+
+HideBtn.MouseButton1Click:Connect(function()
+    State.UIHidden = not State.UIHidden
+    MainFrame.Visible = not State.UIHidden
+    HideBtn.Text = State.UIHidden and "SHOW UI" : "HIDE UI"
+    HideBtn.BackgroundTransparency = State.UIHidden and 0.85 or 0.35
+end)
+
+-- Input Geser Layar Mode FREE
+local DragLook = false
+UserInputService.InputBegan:Connect(function(input, gp)
+    if gp then return end
+    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton2 then
+        DragLook = true
+    end
+end)
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton2 then
+        DragLook = false
+    end
+end)
+UserInputService.InputChanged:Connect(function(input, gp)
+    if not State.Enabled or State.Mode ~= "FREE" or gp then return end
+    if DragLook and (input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseMovement) then
+        TargetRot = Vector3.new(
+            math.clamp(TargetRot.X - input.Delta.Y * 0.22, -89, 89),
+            TargetRot.Y - input.Delta.X * 0.22,
+            0
+        )
+    end
+end)
+
+-- ================= CINEMATIC ENGINE LOOP =================
+RunService.RenderStepped:Connect(function(dt)
+    if not State.Enabled then return end
+
+    Camera.CameraType = Enum.CameraType.Scriptable
+    Camera.FieldOfView = Camera.FieldOfView + (State.FOV - Camera.FieldOfView) * 0.12
+    State.Timer = State.Timer + dt
+
+    local spd = State.Speed
+    local dir = State.Dir
+    local currentSmooth = State.Smooth
+
+    if State.Mode == "PAN" then
+        TargetRot = TargetRot + Vector3.new(0, (18 * spd * dir) * dt, 0)
+    elseif State.Mode == "TILT" then
+        TargetRot = Vector3.new(math.clamp(TargetRot.X + (14 * spd * dir) * dt, -85, 85), TargetRot.Y, 0)
+    elseif State.Mode == "DOLLY_IN" then
+        local forward = CFrame.fromEulerAnglesYXZ(math.rad(CamRot.X), math.rad(CamRot.Y), 0).LookVector
+        TargetPos = TargetPos + (forward * (6 * spd * dt))
+    elseif State.Mode == "DOLLY_OUT" then
+        local forward = CFrame.fromEulerAnglesYXZ(math.rad(CamRot.X), math.rad(CamRot.Y), 0).LookVector
+        TargetPos = TargetPos - (forward * (6 * spd * dt))
+    elseif State.Mode == "TRACKING" then
+        local currentSub = GetFocusTarget()
+        local deltaSub = currentSub - LastSubjectPos
+        LastSubjectPos = currentSub
+        if deltaSub.Magnitude > 0.001 then TargetPos = TargetPos + deltaSub
+        else
+            local right = CFrame.fromEulerAnglesYXZ(0, math.rad(CamRot.Y), 0).RightVector
+            TargetPos = TargetPos + (right * (6 * spd * dir * dt))
+        end
+    elseif State.Mode == "CRAB" then
+        local right = CFrame.fromEulerAnglesYXZ(math.rad(CamRot.X), math.rad(CamRot.Y), 0).RightVector
+        TargetPos = TargetPos + (right * (7 * spd * dir * dt))
+    elseif State.Mode == "PED_UP" then
+        TargetPos = TargetPos + Vector3.new(0, 5 * spd * dt, 0)
+    elseif State.Mode == "PED_DOWN" then
+        TargetPos = TargetPos - Vector3.new(0, 5 * spd * dt, 0)
+    elseif State.Mode == "ARC" then
+        PivotPos = GetFocusTarget()
+        local offset = BaseCFrame.Position - PivotPos
+        local radius = math.max(8, Vector2.new(offset.X, offset.Z).Magnitude)
+        local startAngle = math.atan2(offset.Z, offset.X)
+        local angle = startAngle + (State.Timer * 0.55 * spd * dir)
+        TargetPos = PivotPos + Vector3.new(math.cos(angle) * radius, offset.Y, math.sin(angle) * radius)
+        CamPos = CamPos:Lerp(TargetPos, currentSmooth)
+        Camera.CFrame = CFrame.lookAt(CamPos, PivotPos)
+        return
+    elseif State.Mode == "WHIP" then
+        currentSmooth = 0.28
+        TargetRot = TargetRot + Vector3.new(0, (420 * spd * dir) * dt, 0)
+        if State.Timer >= (0.22 / spd) then SetMode("FREE", "FREE (Selesai)") end
+    elseif State.Mode == "COMBO" then
+        TargetRot = Vector3.new(math.clamp(TargetRot.X + (9 * spd * dir) * dt, -85, 85), TargetRot.Y + (16 * spd * dir) * dt, 0)
+    elseif State.Mode == "FOLLOW" then
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            TargetPos = hrp.Position - (hrp.CFrame.LookVector * 10) + Vector3.new(0, 3, 0)
+            CamPos = CamPos:Lerp(TargetPos, 0.05 * spd)
+            local swayX = math.noise(State.Timer * 1.4, 10) * 1.5
+            local swayY = math.noise(10, State.Timer * 1.4) * 1.5
+            Camera.CFrame = Camera.CFrame:Lerp(CFrame.lookAt(CamPos, hrp.Position + Vector3.new(swayX, 1.5 + swayY, 0)), 0.12)
+            return
+        end
+    elseif State.Mode == "THE_ORBIT" then
+        PivotPos = GetFocusTarget()
+        local offset = BaseCFrame.Position - PivotPos
+        local radius = math.clamp(Vector2.new(offset.X, offset.Z).Magnitude, 4, 14)
+        local startAngle = math.atan2(offset.Z, offset.X)
+        local angle = startAngle + math.sin(State.Timer * 0.9 * spd) * (1.3 * dir)
+        TargetPos = PivotPos + Vector3.new(math.cos(angle) * radius, offset.Y * 0.85, math.sin(angle) * radius)
+        CamPos = CamPos:Lerp(TargetPos, currentSmooth)
+        Camera.CFrame = CFrame.lookAt(CamPos, PivotPos)
+        return
+    elseif State.Mode == "THE_SPIN" then
+        local forward = BaseCFrame.LookVector
+        TargetPos = BaseCFrame.Position + (forward * (math.sin(State.Timer * 0.8 * spd) * 3.5))
+        TargetRot = Vector3.new(TargetRot.X, TargetRot.Y, TargetRot.Z + (65 * spd * dir * dt))
+    elseif State.Mode == "THE_ARC_V" then
+        PivotPos = GetFocusTarget()
+        local dist = math.clamp((BaseCFrame.Position - PivotPos).Magnitude, 4, 15)
+        local elev = math.rad(-20 + (math.sin(State.Timer * 0.85 * spd) * 45 * dir))
+        local flatForward = Vector3.new(BaseCFrame.LookVector.X, 0, BaseCFrame.LookVector.Z).Unit
+        TargetPos = PivotPos - (flatForward * (math.cos(elev) * dist)) + Vector3.new(0, math.sin(elev) * dist, 0)
+        CamPos = CamPos:Lerp(TargetPos, currentSmooth)
+        Camera.CFrame = CFrame.lookAt(CamPos, PivotPos)
+        return
+    elseif State.Mode == "THE_REVEAL" then
+        PivotPos = GetFocusTarget()
+        local right = BaseCFrame.RightVector
+        local forward = BaseCFrame.LookVector
+        TargetPos = BaseCFrame.Position + (right * (math.sin(State.Timer * 0.75 * spd) * 7 * dir)) + (forward * ((1 - math.cos(State.Timer * 0.75 * spd)) * 2.5))
+        CamPos = CamPos:Lerp(TargetPos, currentSmooth)
+        Camera.CFrame = Camera.CFrame:Lerp(CFrame.lookAt(CamPos, PivotPos), currentSmooth * 1.4)
+        return
+
+    -- 6 PRESET CINEMATIC TAMBAHAN BARU
+    elseif State.Mode == "PARALLAX_FLY" then
+        PivotPos = GetFocusTarget()
+        local right = BaseCFrame.RightVector
+        TargetPos = BaseCFrame.Position + (right * (8 * spd * dir * dt)) + Vector3.new(0, math.sin(State.Timer * 1.2) * 0.05, 0)
+        CamPos = CamPos:Lerp(TargetPos, currentSmooth)
+        Camera.CFrame = Camera.CFrame:Lerp(CFrame.lookAt(CamPos, PivotPos), 0.1)
+        return
+    elseif State.Mode == "HELIX_CRANE" then
+        PivotPos = GetFocusTarget()
+        local offset = BaseCFrame.Position - PivotPos
+        local angle = math.atan2(offset.Z, offset.X) + (State.Timer * 0.4 * spd * dir)
+        local height = offset.Y + (State.Timer * 1.5 * spd)
+        TargetPos = PivotPos + Vector3.new(math.cos(angle) * 12, height, math.sin(angle) * 12)
+        CamPos = CamPos:Lerp(TargetPos, currentSmooth)
+        Camera.CFrame = CFrame.lookAt(CamPos, PivotPos)
+        return
+    elseif State.Mode == "DUTCH_SLAM" then
+        TargetRot = Vector3.new(TargetRot.X, TargetRot.Y, math.sin(State.Timer * 2) * 22)
+    elseif State.Mode == "Z_BOOM" then
+        local up = Vector3.new(0, 1, 0)
+        TargetPos = TargetPos + (up * (math.sin(State.Timer * 1.5) * 4 * dt * spd))
+    elseif State.Mode == "SWEEP_ARC" then
+        PivotPos = GetFocusTarget()
+        local offset = BaseCFrame.Position - PivotPos
+        local r = Vector2.new(offset.X, offset.Z).Magnitude + (State.Timer * 2 * spd)
+        local angle = math.atan2(offset.Z, offset.X) + (State.Timer * 0.3 * dir)
+        TargetPos = PivotPos + Vector3.new(math.cos(angle) * r, offset.Y, math.sin(angle) * r)
+        CamPos = CamPos:Lerp(TargetPos, currentSmooth)
+        Camera.CFrame = CFrame.lookAt(CamPos, PivotPos)
+        return
+    elseif State.Mode == "ORBIT_ZOOM" then
+        PivotPos = GetFocusTarget()
+        State.FOV = math.clamp(40 + math.sin(State.Timer * 0.8) * 20, 20, 90)
+        local angle = State.Timer * 0.5 * dir
+        TargetPos = PivotPos + Vector3.new(math.cos(angle) * 10, 4, math.sin(angle) * 10)
+        CamPos = CamPos:Lerp(TargetPos, currentSmooth)
+        Camera.CFrame = CFrame.lookAt(CamPos, PivotPos)
+        return
+    end
+
+    CamRot = CamRot:Lerp(TargetRot, currentSmooth * 1.5)
+    CamPos = CamPos:Lerp(TargetPos, currentSmooth)
+
+    local finalRot = CFrame.fromEulerAnglesYXZ(math.rad(CamRot.X), math.rad(CamRot.Y), math.rad(CamRot.Z))
+    Camera.CFrame = CFrame.new(CamPos) * finalRot
+end)
